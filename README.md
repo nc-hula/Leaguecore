@@ -2,7 +2,7 @@
 
 **Leaguecore** is a modern, open-source media submission and ranked-choice voting platform designed for hosting thematic league-style competitions among friends. 
 
-Scaffolded with **Kiro**, this project provides a robust TypeScript-based monorepo structure containing a Node/Express backend, a React frontend, and a shared module housing types and custom voting algorithms.
+Scaffolded with **Kiro**, this project provides a robust TypeScript-based monorepo structure containing a **Hono backend running on Cloudflare Workers**, a React frontend, and a shared module housing types and custom voting algorithms.
 
 ---
 
@@ -23,8 +23,11 @@ Leaguecore is built using a modern, type-safe stack:
 
 *   **Monorepo Tooling**: npm Workspaces
 *   **Frontend**: React 18, Vite, TypeScript, React Router v6, `@dnd-kit/core` (for drag-and-drop ranking UI)
-*   **Backend**: Node.js, Express, TypeScript, Passport.js (Google OAuth 2.0)
-*   **Database**: PostgreSQL 16, pg-pool, `connect-pg-simple` (for persistent sessions)
+*   **Backend**: Cloudflare Workers, [Hono](https://hono.dev), TypeScript
+*   **Auth**: Google OAuth 2.0 with stateless, HTTP-only **JWT session cookies** (`hono/jwt` + `hono/cookie`) — no server-side session store
+*   **Database**: PostgreSQL (Neon / serverless) via `@neondatabase/serverless`
+*   **Scheduling**: Cloudflare Workers **Cron Triggers** (rigid-mode deadline advancement runs every minute)
+*   **Local dev / deploy**: [Wrangler](https://developers.cloudflare.com/workers/wrangler/)
 *   **Testing**: Vitest, `fast-check` (for property-based testing of core algorithms and flows)
 
 ---
@@ -36,14 +39,17 @@ Leaguecore is built using a modern, type-safe stack:
 │   ├── src/                 # Client source code (views, context, dnd components)
 │   ├── package.json
 │   └── tsconfig.json
-├── server/                  # Express backend
+├── server/                  # Hono backend (Cloudflare Worker)
 │   ├── src/
+│   │   ├── index.ts        # Worker entrypoint (fetch + scheduled handlers)
+│   │   ├── app.ts          # Hono app: middleware, CSP, router mounting
 │   │   ├── __tests__/       # Test suites and property-based tests
-│   │   ├── api/             # API Router & services (Leagues, Rounds, Entries, Ballots, Comments)
-│   │   ├── auth/            # Passport.js OAuth routes & config
-│   │   ├── db/              # Postgres pool & migration manager
+│   │   ├── api/             # API routers & services (Leagues, Rounds, Entries, Ballots, Comments)
+│   │   ├── auth/            # Google OAuth routes + JWT session middleware
+│   │   ├── db/              # Serverless Postgres pool & migration manager
 │   │   ├── services/        # MediaFetcherService (Spotify/YouTube oEmbed)
-│   │   └── scheduler.ts     # Automated Rigid Mode deadline scheduler
+│   │   └── scheduler.ts     # Rigid-mode deadline check, invoked by the Cron Trigger
+│   ├── wrangler.toml        # Worker config (vars, cron trigger, compat flags)
 │   ├── package.json
 │   └── tsconfig.json
 ├── shared/                  # Common code imported by both client and server
@@ -62,7 +68,7 @@ Leaguecore is built using a modern, type-safe stack:
 
 ### 🔒 1. User Authentication
 *   **Google OAuth Sign-In**: Securely logs users in using Google accounts.
-*   **Persistent Sessions**: Sessions are saved to PostgreSQL via `connect-pg-simple`, ensuring users stay logged in.
+*   **Stateless Sessions**: A signed, HTTP-only **JWT cookie** carries the session and is verified at the edge on every request — no server-side session store required.
 *   **Data Minimization**: The database stores only the OAuth provider ID, display name, and email address; OAuth access tokens are discarded immediately post-authentication.
 
 ### 🏆 2. League Creation & Administration
@@ -72,7 +78,7 @@ Leaguecore is built using a modern, type-safe stack:
 *   **Custom Media Types**: Configure the league to focus on specific media categories (Video 🎞️, Music 🎶, Meme 🐸, Podcast 🎙️, Potpourri 🍲, or custom categories defined with a custom name and emoji).
 
 ### ⏱️ 3. Round Management & Deadline Modes
-*   **Rigid Mode**: Rounds have strict, pre-configured deadlines for both submission and voting phases. A backend scheduler checks every 60 seconds and automatically advances the round.
+*   **Rigid Mode**: Rounds have strict, pre-configured deadlines for both submission and voting phases. A Cloudflare Workers **Cron Trigger** fires every minute and automatically advances any round whose deadline has passed.
 *   **Flexible Mode**: The round automatically advances to the next phase as soon as all players have finished their respective actions (all submitted entries, or all voted), with options for manual admin overrides.
 *   **Round Weighting**: Assign custom weights to rounds (e.g., a "Double Points" finale) which are calculated into the cumulative standings.
 *   **Per-Round Overrides**: Admins can override the league-level media type and allowed submission platforms for a single round without changing league defaults.
@@ -126,7 +132,8 @@ Leaguecore uses a relational PostgreSQL schema designed for high integrity and c
 ### 1. Prerequisites
 Ensure you have the following installed:
 *   [Node.js](https://nodejs.org/) (v18+ recommended)
-*   [PostgreSQL](https://www.postgresql.org/) (v16+ recommended)
+*   A PostgreSQL database — a serverless [Neon](https://neon.tech/) database is recommended (the Worker connects via `@neondatabase/serverless`), or any PostgreSQL 16+ instance reachable over TLS.
+*   [Wrangler](https://developers.cloudflare.com/workers/wrangler/) (installed automatically as a dev dependency) for running and deploying the Worker.
 
 ### 2. Setup & Installation
 Clone the repository and run the following command in the root directory to install dependencies across the monorepo workspaces:
@@ -135,33 +142,38 @@ npm install
 ```
 
 ### 3. Environment Variables
-Create a `.env` file inside the `server/` directory and configure your credentials:
+The backend runs as a Cloudflare Worker, so local secrets live in `server/.dev.vars` (Wrangler loads this automatically; it is git-ignored). Copy the example and fill it in:
+```bash
+cp server/.dev.vars.example server/.dev.vars
+```
 ```ini
-DATABASE_URL=postgresql://username:password@localhost:5432/league_app
+# server/.dev.vars
+DATABASE_URL=postgresql://user:password@host/league_app?sslmode=require
 NODE_ENV=development
 SESSION_SECRET=your-random-session-secret
 GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 CLIENT_URL=http://localhost:5173
-PORT=3000
 ```
+Non-secret defaults (`NODE_ENV`, `CLIENT_URL`) and the cron schedule live in `server/wrangler.toml`. For production, set secrets with `npx wrangler secret put <NAME>`.
 
 ### 4. Database Setup & Migration
-Initialize your database schema by running the migration script:
+The migration runner is a plain Node script (it uses `pg`, not the Worker runtime). With `DATABASE_URL` exported in your shell, run:
 ```bash
 # From the server/ directory:
 npx ts-node src/db/migrate.ts
 ```
 
 ### 5. Running the Application
-To run the server and client concurrently in development mode, run the following commands from the root directory:
+Run the backend Worker and the frontend dev server from the repository root:
 ```bash
-# Starts the backend server (on port 3000)
+# Backend — Cloudflare Worker via Wrangler (http://localhost:8787)
 npm run dev:server
 
-# Starts the frontend Vite dev server (on port 5173)
+# Frontend — Vite dev server (http://localhost:5173)
 npm run dev:client
 ```
+The Vite dev server proxies `/api` and `/auth` to the Worker; update the proxy target in `client/vite.config.ts` to `http://localhost:8787` so the two line up.
 
 ---
 

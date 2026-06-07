@@ -6,8 +6,10 @@ The League App is a web application for running league-style media submission an
 
 ### Key Design Decisions
 
-- **Monorepo structure**: A single repository with `client/` (React) and `server/` (Node.js/Express) packages, sharing TypeScript types via a `shared/` package.
-- **Session-based auth**: Google OAuth via Passport.js with server-side sessions stored in PostgreSQL (connect-pg-simple), avoiding the complexity of JWT refresh flows for a social app.
+- **Monorepo structure**: A single repository with `client/` (React) and `server/` (Hono/Cloudflare Worker) packages, sharing TypeScript types via a `shared/` package.
+- **Session-based auth**: Stateless Google OAuth using secure, HTTP-only JWT cookies verified at the edge, avoiding database reads/writes for session data on every request.
+- **Serverless PostgreSQL**: Queried via `@neondatabase/serverless` or Cloudflare Hyperdrive to handle high-concurrency, short-lived edge connections efficiently.
+- **Workers Cron Triggers**: Ephemeral round deadline processing triggered every minute via Cloudflare Workers `scheduled` events, replacing a persistent `setInterval` server loop.
 - **oEmbed for metadata**: Both Spotify and YouTube expose oEmbed endpoints that return title and embed HTML without requiring user-scoped API tokens. The backend fetches these at submission time and caches the result on the entry row.
 - **dnd-kit for the Ranker**: `@dnd-kit/core` + `@dnd-kit/modifiers` provides the snap-to-grid, multi-container drag-and-drop needed for the ranked ballot UI without requiring a full canvas approach.
 - **EqualRCV as a pure function**: The scoring engine is implemented as a stateless TypeScript function that takes ballots and returns rankings, making it straightforward to test and reuse for both per-round and cumulative standings.
@@ -17,7 +19,6 @@ The League App is a web application for running league-style media submission an
 - **Spotify oEmbed** (`https://open.spotify.com/oembed?url=<track_url>`) returns `title`, `thumbnail_url`, and `html` (embed iframe) with no authentication required. [Source](https://developer.spotify.com/documentation/embeds/tutorials/using-the-oembed-api)
 - **YouTube oEmbed** (`https://www.youtube.com/oembed?url=<video_url>&format=json`) returns `title`, `thumbnail_url`, and `html` with no API key required.
 - **dnd-kit** provides a `Snap` modifier that constrains drag movement to a configurable grid size, and supports multiple droppable containers (unsorted bin + ranked grid). [Source](https://dndkit.com/extend/modifiers)
-- **Passport.js** with `passport-google-oauth20` is the standard Node.js approach for Google OAuth 2.0, integrating cleanly with Express sessions.
 
 ---
 
@@ -35,7 +36,7 @@ The system follows a standard three-tier web architecture:
 └────────────────────────┬────────────────────────────────┘
                          │ HTTPS / REST + JSON
 ┌────────────────────────▼────────────────────────────────┐
-│                   Node.js / Express API                 │
+│             Hono / Cloudflare Workers API               │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐  │
 │  │  Auth    │  │ League   │  │  Entry   │  │ Score  │  │
 │  │ Router   │  │ Router   │  │ Router   │  │ Engine │  │
@@ -45,9 +46,9 @@ The system follows a standard three-tier web architecture:
 │  │   (Spotify oEmbed + YouTube oEmbed)              │   │
 │  └──────────────────────────────────────────────────┘   │
 └────────────────────────┬────────────────────────────────┘
-                         │
+                         │ TCP via Hyperdrive/WebSockets
 ┌────────────────────────▼────────────────────────────────┐
-│                     PostgreSQL                          │
+│              PostgreSQL (Serverless)                    │
 │  users · leagues · league_members · rounds · entries   │
 │  ballots · ballot_items · comments · round_results     │
 └─────────────────────────────────────────────────────────┘
@@ -58,11 +59,11 @@ The system follows a standard three-tier web architecture:
 | Layer | Technology |
 |---|---|
 | Frontend | React 18, TypeScript, React Router v6, dnd-kit |
-| Backend | Node.js 20, Express 5, TypeScript |
-| Database | PostgreSQL 16, node-postgres (`pg`) |
-| Auth | Passport.js, passport-google-oauth20, express-session, connect-pg-simple |
+| Backend | Cloudflare Workers, Hono, TypeScript |
+| Database | PostgreSQL (Neon / Supabase), `@neondatabase/serverless` or Hyperdrive |
+| Auth | Stateless JWT session cookies, Hono Google OAuth middleware |
 | Media | Spotify oEmbed API, YouTube oEmbed API |
-| Testing | Vitest (unit + property), fast-check (PBT), Supertest (API) |
+| Testing | Vitest (unit + property), fast-check (PBT) |
 
 ---
 
@@ -595,9 +596,9 @@ Each test is tagged with a comment in the format:
 | P12: League join idempotency | Generate user + league; join twice; verify membership count unchanged |
 | P13: Comment access requires reveal | Generate members + reveal states; verify comment permission = identity revealed (or bonus track after submission phase) |
 
-### Integration Tests (Supertest)
+### Integration Tests (Hono Test Client)
 
-Integration tests run against a test PostgreSQL database and cover:
+Integration tests run using Hono's `app.request()` mock interface against a test PostgreSQL database and cover:
 
 - Full OAuth flow (mocked Google responses)
 - League creation → invite → join flow

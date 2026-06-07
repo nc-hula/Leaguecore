@@ -1,0 +1,9 @@
+# Local secrets for `wrangler dev`. Copy to `.dev.vars` (git-ignored) and fill in.
+# Non-secret vars (NODE_ENV, CLIENT_URL) and the cron schedule live in wrangler.toml.
+# For production, set these with: npx wrangler secret put <NAME>
+
+DATABASE_URL=postgresql://user:password@host/league_app?sslmode=require
+SESSION_SECRET=change-me-in-production
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+CLIENT_URL=http://localhost:5173

@@ -1,52 +1,82 @@
-import { Request, Response, NextFunction } from 'express';
+import { Context, Next } from 'hono';
+import { getCookie } from 'hono/cookie';
+import { verify } from 'hono/jwt';
 import { query } from '../db';
+
+export interface AuthUser {
+  id: string;
+  displayName: string;
+  email: string;
+}
+
+export type AppEnv = {
+  Variables: {
+    user?: AuthUser;
+  };
+};
+
+/**
+ * Middleware that parses the JWT session cookie and populates context 'user' variable.
+ */
+export async function authSessionMiddleware(c: Context, next: Next): Promise<void> {
+  const token = getCookie(c, 'session');
+  if (token) {
+    try {
+      const secret = process.env.SESSION_SECRET ?? 'dev-secret-change-me';
+      const payload = await verify(token, secret, 'HS256') as unknown as AuthUser;
+      if (payload && payload.id) {
+        c.set('user', payload);
+      }
+    } catch (err) {
+      // Invalid or expired token — ignore and let requireAuth handle blocking if needed
+    }
+  }
+  await next();
+}
 
 /**
  * Middleware that requires an authenticated user.
- * Returns 401 JSON if req.user is not set.
+ * Returns 401 JSON if context user is not set.
  */
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  if (!req.user) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
+export async function requireAuth(c: Context, next: Next): Promise<Response | void> {
+  const user = c.get('user') as AuthUser | undefined;
+  if (!user) {
+    return c.json({ error: 'Unauthorized' }, 401);
   }
-  next();
+  await next();
 }
 
 /**
  * Middleware that requires the authenticated user to be a league admin.
- * Reads the league ID from req.params.id or req.params.leagueId.
+ * Reads the league ID from the request params.
  * Returns 403 if the user is not an admin of the league.
  */
-export function requireLeagueAdmin(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
-  const leagueId = req.params.id ?? req.params.leagueId;
+export async function requireLeagueAdmin(c: Context, next: Next): Promise<Response | void> {
+  const leagueId = c.req.param('id') ?? c.req.param('leagueId');
 
   if (!leagueId) {
-    res.status(400).json({ error: 'League ID is required' });
-    return;
+    return c.json({ error: 'League ID is required' }, 400);
   }
 
-  if (!req.user) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
+  const user = c.get('user') as AuthUser | undefined;
+  if (!user) {
+    return c.json({ error: 'Unauthorized' }, 401);
   }
 
-  const userId = req.user.id;
+  const userId = user.id;
 
-  query<{ role: string }>(
-    `SELECT role FROM league_members WHERE league_id = $1 AND user_id = $2 AND role = 'admin'`,
-    [leagueId, userId]
-  )
-    .then((result) => {
-      if (result.rows.length === 0) {
-        res.status(403).json({ error: 'Forbidden: admin role required' });
-        return;
-      }
-      next();
-    })
-    .catch((err: unknown) => next(err));
+  try {
+    const result = await query<{ role: string }>(
+      `SELECT role FROM league_members WHERE league_id = $1 AND user_id = $2 AND role = 'admin'`,
+      [leagueId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return c.json({ error: 'Forbidden: admin role required' }, 403);
+    }
+    await next();
+  } catch (err) {
+    console.error('Error verifying league admin role:', err);
+    return c.json({ error: 'Internal Server Error' }, 500);
+  }
 }

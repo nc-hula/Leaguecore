@@ -2,7 +2,9 @@
 
 ## Overview
 
-Implement the League App as a TypeScript monorepo with a React 18 client, Node.js/Express 5 server, and PostgreSQL 16 database. Tasks are ordered to build foundational infrastructure first, then layer in features incrementally, wiring everything together at the end.
+Implement the League App as a TypeScript monorepo with a React 18 client, a Hono backend running on Cloudflare Workers, and a serverless PostgreSQL database. Tasks are ordered to build foundational infrastructure first, then layer in features incrementally, wiring everything together at the end.
+
+> **Note:** The task text below reflects the original Express/Passport plan. The backend was subsequently migrated to Hono on Cloudflare Workers with stateless JWT-cookie auth, `@neondatabase/serverless`, and a Workers Cron Trigger for rigid-mode deadlines. See `design.md` for the current target architecture.
 
 ## Tasks
 

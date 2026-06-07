@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Cloudflare Worker local secrets & state
+server/.dev.vars
+.dev.vars
+.wrangler/
+
+# Build output
+dist/
+client/dist/
+
+# Logs / env
+*.log
+.env
+.env.local

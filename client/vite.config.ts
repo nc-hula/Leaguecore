@@ -5,8 +5,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://localhost:3000',
-      '/auth': 'http://localhost:3000',
+      // Targets the local Cloudflare Worker started by `npm run dev:server` (wrangler dev).
+      '/api': 'http://localhost:8787',
+      '/auth': 'http://localhost:8787',
     },
   },
   test: {

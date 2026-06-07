@@ -6,7 +6,7 @@ The League App is a web application for running league-style media submission an
 
 The app supports a variety of media types — including music, video, memes, podcasts, and more — configurable at the league level with optional per-round overrides. The admin experience follows a "quick to start, deep to customize" philosophy: sensible defaults allow a league or round to be created with minimal configuration, while all settings remain available for admins who want them.
 
-The application is built with a React frontend, Node.js backend, and PostgreSQL database.
+The application is built with a React frontend, a Hono backend deployed as a Cloudflare Worker, and a PostgreSQL database.
 
 ## Glossary
 

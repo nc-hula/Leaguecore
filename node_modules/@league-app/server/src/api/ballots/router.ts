@@ -1,21 +1,19 @@
-import { Router, Request, Response, NextFunction } from 'express';
-import { requireAuth } from '../../auth/middleware';
+import { Hono, Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { requireAuth, AuthUser, AppEnv } from '../../auth/middleware';
 import { isLeagueMember } from '../leagues/service';
 import { submitBallot, getBallot } from './service';
 import { query } from '../../db';
 
-// mergeParams: true is required so that :roundId from the parent router
-// is accessible in this sub-router's req.params
-const router = Router({ mergeParams: true });
+const router = new Hono<AppEnv>();
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 
 /** Forward service errors that carry a .status property to the client. */
-function handleServiceError(err: unknown, res: Response): void {
+function handleServiceError(err: unknown, c: Context): Response {
   if (err instanceof Error && 'status' in err) {
     const status = (err as Error & { status: number }).status;
-    res.status(status).json({ error: err.message });
-    return;
+    return c.json({ error: err.message }, status as ContentfulStatusCode);
   }
   throw err;
 }
@@ -41,64 +39,57 @@ async function getLeagueIdForRound(roundId: string): Promise<string | null> {
  * Requires authentication and league membership.
  * Returns 201 with the submitted ballot on success.
  */
-router.put(
-  '/',
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { roundId } = req.params;
-      const userId = req.user!.id;
+router.put('/', requireAuth, async (c) => {
+  try {
+    const roundId = c.req.param('roundId')!;
+    const user = c.get('user') as AuthUser;
+    const userId = user.id;
 
-      // Verify user is a league member
-      const leagueId = await getLeagueIdForRound(roundId as string);
-      if (leagueId === null) {
-        res.status(404).json({ error: 'Round not found' });
-        return;
+    // Verify user is a league member
+    const leagueId = await getLeagueIdForRound(roundId);
+    if (leagueId === null) {
+      return c.json({ error: 'Round not found' }, 404);
+    }
+
+    const member = await isLeagueMember(leagueId, userId);
+    if (!member) {
+      return c.json({ error: 'Forbidden: you are not a member of this league' }, 403);
+    }
+
+    const body = await c.req.json().catch(() => ({})) as {
+      items?: Array<{ entryId?: string; rankPosition?: number }>;
+    };
+
+    const items = body.items;
+
+    if (!Array.isArray(items)) {
+      return c.json({ error: 'items must be an array' }, 400);
+    }
+
+    // Validate each item has required fields
+    for (const item of items) {
+      if (typeof item.entryId !== 'string' || item.entryId.trim() === '') {
+        return c.json({ error: 'Each item must have a valid entryId' }, 400);
       }
-
-      const member = await isLeagueMember(leagueId, userId);
-      if (!member) {
-        res.status(403).json({ error: 'Forbidden: you are not a member of this league' });
-        return;
-      }
-
-      const { items } = req.body as {
-        items?: Array<{ entryId?: string; rankPosition?: number }>;
-      };
-
-      if (!Array.isArray(items)) {
-        res.status(400).json({ error: 'items must be an array' });
-        return;
-      }
-
-      // Validate each item has required fields
-      for (const item of items) {
-        if (typeof item.entryId !== 'string' || item.entryId.trim() === '') {
-          res.status(400).json({ error: 'Each item must have a valid entryId' });
-          return;
-        }
-        if (typeof item.rankPosition !== 'number' || item.rankPosition < 0) {
-          res.status(400).json({ error: 'Each item must have a non-negative rankPosition' });
-          return;
-        }
-      }
-
-      const ballot = await submitBallot({
-        roundId: roundId as string,
-        voterId: userId,
-        items: items as Array<{ entryId: string; rankPosition: number }>,
-      });
-
-      res.status(201).json(ballot);
-    } catch (err) {
-      if (err instanceof Error && 'status' in err) {
-        handleServiceError(err, res);
-      } else {
-        next(err);
+      if (typeof item.rankPosition !== 'number' || item.rankPosition < 0) {
+        return c.json({ error: 'Each item must have a non-negative rankPosition' }, 400);
       }
     }
+
+    const ballot = await submitBallot({
+      roundId,
+      voterId: userId,
+      items: items as Array<{ entryId: string; rankPosition: number }>,
+    });
+
+    return c.json(ballot, 201);
+  } catch (err) {
+    if (err instanceof Error && 'status' in err) {
+      return handleServiceError(err, c);
+    }
+    throw err;
   }
-);
+});
 
 // ─── GET /api/rounds/:roundId/ballot ─────────────────────────────────────────
 
@@ -108,26 +99,22 @@ router.put(
  *
  * Requires authentication.
  */
-router.get(
-  '/',
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { roundId } = req.params;
-      const userId = req.user!.id;
+router.get('/', requireAuth, async (c) => {
+  try {
+    const roundId = c.req.param('roundId')!;
+    const user = c.get('user') as AuthUser;
+    const userId = user.id;
 
-      const ballot = await getBallot(roundId as string, userId);
+    const ballot = await getBallot(roundId, userId);
 
-      if (ballot === null) {
-        res.status(404).json({ error: 'No ballot found for this round' });
-        return;
-      }
-
-      res.json(ballot);
-    } catch (err) {
-      next(err);
+    if (ballot === null) {
+      return c.json({ error: 'No ballot found for this round' }, 404);
     }
+
+    return c.json(ballot, 200);
+  } catch (err) {
+    throw err;
   }
-);
+});
 
 export default router;

@@ -1,5 +1,6 @@
-import { Router, Request, Response, NextFunction } from 'express';
-import { requireAuth, requireLeagueAdmin } from '../../auth/middleware';
+import { Hono, Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { requireAuth, requireLeagueAdmin, AuthUser, AppEnv } from '../../auth/middleware';
 import {
   createLeague,
   getLeague,
@@ -14,18 +15,17 @@ import {
   getLeagueStandings,
 } from './service';
 
-const router = Router();
+const router = new Hono<AppEnv>();
 
 // ─── Helper ─────────────────────────────────────────────────────────────────
 
 /** Forward service errors that carry a .status property to the client. */
-function handleServiceError(err: unknown, res: Response): void {
+function handleServiceError(err: unknown, c: Context): Response {
   if (err instanceof Error && 'status' in err) {
     const status = (err as Error & { status: number }).status;
-    res.status(status).json({ error: err.message });
-    return;
+    return c.json({ error: err.message }, status as ContentfulStatusCode);
   }
-  throw err; // let Express error handler deal with unexpected errors
+  throw err; // let global error handler deal with unexpected errors
 }
 
 // ─── POST /api/leagues ───────────────────────────────────────────────────────
@@ -34,41 +34,39 @@ function handleServiceError(err: unknown, res: Response): void {
  * Create a new league.
  * Body: { name, mediaTypeName?, mediaTypeEmoji?, revealMode? }
  */
-router.post(
-  '/',
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { name, mediaTypeName, mediaTypeEmoji, revealMode } = req.body as {
-        name?: string;
-        mediaTypeName?: string;
-        mediaTypeEmoji?: string;
-        revealMode?: string;
-      };
+router.post('/', requireAuth, async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({})) as {
+      name?: string;
+      mediaTypeName?: string;
+      mediaTypeEmoji?: string;
+      revealMode?: string;
+    };
 
-      if (!name || typeof name !== 'string' || name.trim() === '') {
-        res.status(400).json({ error: 'name is required' });
-        return;
-      }
+    const name = body.name;
+    const { mediaTypeName, mediaTypeEmoji, revealMode } = body;
 
-      const league = await createLeague({
-        name: name.trim(),
-        mediaTypeName,
-        mediaTypeEmoji,
-        revealMode,
-        creatorId: req.user!.id,
-      });
-
-      res.status(201).json(league);
-    } catch (err) {
-      if (err instanceof Error && 'status' in err) {
-        handleServiceError(err, res);
-      } else {
-        next(err);
-      }
+    if (!name || typeof name !== 'string' || name.trim() === '') {
+      return c.json({ error: 'name is required' }, 400);
     }
+
+    const user = c.get('user') as AuthUser;
+    const league = await createLeague({
+      name: name.trim(),
+      mediaTypeName,
+      mediaTypeEmoji,
+      revealMode,
+      creatorId: user.id,
+    });
+
+    return c.json(league, 201);
+  } catch (err) {
+    if (err instanceof Error && 'status' in err) {
+      return handleServiceError(err, c);
+    }
+    throw err;
   }
-);
+});
 
 // ─── POST /api/leagues/join/:token ───────────────────────────────────────────
 
@@ -76,77 +74,65 @@ router.post(
  * Join a league via invite token.
  * Must be defined before /:id routes to avoid token being matched as an id.
  */
-router.post(
-  '/join/:token',
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { token } = req.params;
-      const result = await joinLeague(token as string, req.user!.id);
+router.post('/join/:token', requireAuth, async (c) => {
+  try {
+    const token = c.req.param('token')!;
+    const user = c.get('user') as AuthUser;
+    const result = await joinLeague(token, user.id);
 
-      if (result.alreadyMember) {
-        res.status(200).json({ message: result.message, alreadyMember: true });
-      } else {
-        res.status(201).json({ message: result.message });
-      }
-    } catch (err) {
-      if (err instanceof Error && 'status' in err) {
-        handleServiceError(err, res);
-      } else {
-        next(err);
-      }
+    if (result.alreadyMember) {
+      return c.json({ message: result.message, alreadyMember: true }, 200);
+    } else {
+      return c.json({ message: result.message }, 201);
     }
+  } catch (err) {
+    if (err instanceof Error && 'status' in err) {
+      return handleServiceError(err, c);
+    }
+    throw err;
   }
-);
+});
 
 // ─── GET /api/leagues ────────────────────────────────────────────────────────
 
 /**
  * List all leagues the authenticated user is a member of.
  */
-router.get(
-  '/',
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const leagues = await listUserLeagues(req.user!.id);
-      res.json(leagues);
-    } catch (err) {
-      next(err);
-    }
+router.get('/', requireAuth, async (c) => {
+  try {
+    const user = c.get('user') as AuthUser;
+    const leagues = await listUserLeagues(user.id);
+    return c.json(leagues, 200);
+  } catch (err) {
+    throw err;
   }
-);
+});
 
 // ─── GET /api/leagues/:id ────────────────────────────────────────────────────
 
 /**
  * Get league details. User must be a member.
  */
-router.get(
-  '/:id',
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { id } = req.params;
+router.get('/:id', requireAuth, async (c) => {
+  try {
+    const id = c.req.param('id')!;
+    const user = c.get('user') as AuthUser;
 
-      const member = await isLeagueMember(id as string, req.user!.id);
-      if (!member) {
-        res.status(403).json({ error: 'Forbidden: you are not a member of this league' });
-        return;
-      }
-
-      const league = await getLeague(id as string);
-      if (!league) {
-        res.status(404).json({ error: 'League not found' });
-        return;
-      }
-
-      res.json(league);
-    } catch (err) {
-      next(err);
+    const member = await isLeagueMember(id, user.id);
+    if (!member) {
+      return c.json({ error: 'Forbidden: you are not a member of this league' }, 403);
     }
+
+    const league = await getLeague(id);
+    if (!league) {
+      return c.json({ error: 'League not found' }, 404);
+    }
+
+    return c.json(league, 200);
+  } catch (err) {
+    throw err;
   }
-);
+});
 
 // ─── PATCH /api/leagues/:id ──────────────────────────────────────────────────
 
@@ -154,163 +140,137 @@ router.get(
  * Update league settings. Admin only.
  * Body: { name?, mediaTypeName?, mediaTypeEmoji?, revealMode?, submissionSources? }
  */
-router.patch(
-  '/:id',
-  requireAuth,
-  requireLeagueAdmin,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { id } = req.params;
-      const { name, mediaTypeName, mediaTypeEmoji, revealMode, submissionSources } =
-        req.body as {
-          name?: string;
-          mediaTypeName?: string;
-          mediaTypeEmoji?: string;
-          revealMode?: string;
-          submissionSources?: string[];
-        };
+router.patch('/:id', requireAuth, requireLeagueAdmin, async (c) => {
+  try {
+    const id = c.req.param('id')!;
+    const body = await c.req.json().catch(() => ({})) as {
+      name?: string;
+      mediaTypeName?: string;
+      mediaTypeEmoji?: string;
+      revealMode?: string;
+      submissionSources?: string[];
+    };
 
-      const updated = await updateLeague(id as string, {
-        name,
-        mediaTypeName,
-        mediaTypeEmoji,
-        revealMode,
-        submissionSources,
-      });
+    const { name, mediaTypeName, mediaTypeEmoji, revealMode, submissionSources } = body;
 
-      res.json(updated);
-    } catch (err) {
-      if (err instanceof Error && 'status' in err) {
-        handleServiceError(err, res);
-      } else {
-        next(err);
-      }
+    const updated = await updateLeague(id, {
+      name,
+      mediaTypeName,
+      mediaTypeEmoji,
+      revealMode,
+      submissionSources,
+    });
+
+    return c.json(updated, 200);
+  } catch (err) {
+    if (err instanceof Error && 'status' in err) {
+      return handleServiceError(err, c);
     }
+    throw err;
   }
-);
+});
 
 // ─── GET /api/leagues/:id/invite ─────────────────────────────────────────────
 
 /**
  * Get the invite URL for a league. Admin only.
  */
-router.get(
-  '/:id/invite',
-  requireAuth,
-  requireLeagueAdmin,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { id } = req.params;
-      const inviteUrl = await getInviteUrl(id as string);
-      res.json({ inviteUrl });
-    } catch (err) {
-      if (err instanceof Error && 'status' in err) {
-        handleServiceError(err, res);
-      } else {
-        next(err);
-      }
+router.get('/:id/invite', requireAuth, requireLeagueAdmin, async (c) => {
+  try {
+    const id = c.req.param('id')!;
+    const inviteUrl = await getInviteUrl(id);
+    return c.json({ inviteUrl }, 200);
+  } catch (err) {
+    if (err instanceof Error && 'status' in err) {
+      return handleServiceError(err, c);
     }
+    throw err;
   }
-);
+});
 
 // ─── GET /api/leagues/:id/members ────────────────────────────────────────────
 
 /**
  * List members of a league. User must be a member.
  */
-router.get(
-  '/:id/members',
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { id } = req.params;
+router.get('/:id/members', requireAuth, async (c) => {
+  try {
+    const id = c.req.param('id')!;
+    const user = c.get('user') as AuthUser;
 
-      const member = await isLeagueMember(id as string, req.user!.id);
-      if (!member) {
-        res.status(403).json({ error: 'Forbidden: you are not a member of this league' });
-        return;
-      }
-
-      const members = await listMembers(id as string);
-      res.json(members);
-    } catch (err) {
-      next(err);
+    const member = await isLeagueMember(id, user.id);
+    if (!member) {
+      return c.json({ error: 'Forbidden: you are not a member of this league' }, 403);
     }
+
+    const members = await listMembers(id);
+    return c.json(members, 200);
+  } catch (err) {
+    throw err;
   }
-);
+});
 
 // ─── DELETE /api/leagues/:id/members/:userId ─────────────────────────────────
 
 /**
  * Remove a member from a league. Admin only.
  */
-router.delete(
-  '/:id/members/:userId',
-  requireAuth,
-  requireLeagueAdmin,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { id, userId } = req.params;
-      await removeMember(id as string, userId as string, req.user!.id);
-      res.json({ message: 'Member removed' });
-    } catch (err) {
-      if (err instanceof Error && 'status' in err) {
-        handleServiceError(err, res);
-      } else {
-        next(err);
-      }
+router.delete('/:id/members/:userId', requireAuth, requireLeagueAdmin, async (c) => {
+  try {
+    const id = c.req.param('id')!;
+    const userId = c.req.param('userId')!;
+    const user = c.get('user') as AuthUser;
+
+    await removeMember(id, userId, user.id);
+    return c.json({ message: 'Member removed' }, 200);
+  } catch (err) {
+    if (err instanceof Error && 'status' in err) {
+      return handleServiceError(err, c);
     }
+    throw err;
   }
-);
+});
 
 // ─── PUT /api/leagues/:id/members/:userId/admin ──────────────────────────────
 
 /**
  * Grant admin role to a league member. Admin only.
  */
-router.put(
-  '/:id/members/:userId/admin',
-  requireAuth,
-  requireLeagueAdmin,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { id, userId } = req.params;
-      await grantAdmin(id as string, userId as string);
-      res.json({ message: 'Admin role granted' });
-    } catch (err) {
-      if (err instanceof Error && 'status' in err) {
-        handleServiceError(err, res);
-      } else {
-        next(err);
-      }
+router.put('/:id/members/:userId/admin', requireAuth, requireLeagueAdmin, async (c) => {
+  try {
+    const id = c.req.param('id')!;
+    const userId = c.req.param('userId')!;
+
+    await grantAdmin(id, userId);
+    return c.json({ message: 'Admin role granted' }, 200);
+  } catch (err) {
+    if (err instanceof Error && 'status' in err) {
+      return handleServiceError(err, c);
     }
+    throw err;
   }
-);
+});
 
 // ─── GET /api/leagues/:id/standings ──────────────────────────────────────────
 
 /**
  * Get cumulative league standings. Member only.
  */
-router.get(
-  '/:id/standings',
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { id } = req.params;
+router.get('/:id/standings', requireAuth, async (c) => {
+  try {
+    const id = c.req.param('id')!;
+    const user = c.get('user') as AuthUser;
 
-      const member = await isLeagueMember(id as string, req.user!.id);
-      if (!member) {
-        res.status(403).json({ error: 'Forbidden: you are not a member of this league' });
-        return;
-      }
-
-      const standings = await getLeagueStandings(id as string);
-      res.json(standings);
-    } catch (err) {
-      next(err);
+    const member = await isLeagueMember(id, user.id);
+    if (!member) {
+      return c.json({ error: 'Forbidden: you are not a member of this league' }, 403);
     }
+
+    const standings = await getLeagueStandings(id);
+    return c.json(standings, 200);
+  } catch (err) {
+    throw err;
   }
-);
+});
 
 export default router;

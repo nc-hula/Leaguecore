@@ -5,6 +5,7 @@ import { pool } from './db';
 import passport from './auth/passport';
 import authRouter from './auth/router';
 import apiRouter from './api/router';
+import { startScheduler } from './scheduler';
 
 const app = express();
 
@@ -40,5 +41,26 @@ app.use(passport.session());
 // Routers
 app.use('/auth', authRouter);
 app.use('/api', apiRouter);
+
+// CSP headers — allow Spotify and YouTube iframes, restrict everything else
+app.use((_req, res, next) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https://i.ytimg.com https://i.scdn.co https://mosaic.scdn.co",
+      "frame-src https://open.spotify.com https://www.youtube.com https://youtube.com",
+      "connect-src 'self'",
+    ].join('; ')
+  );
+  next();
+});
+
+// Start rigid-mode deadline scheduler
+if (process.env.NODE_ENV !== 'test') {
+  startScheduler(pool);
+}
 
 export default app;

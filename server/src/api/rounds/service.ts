@@ -1,4 +1,6 @@
 import { query } from '../../db';
+import { runEqualRCV } from '@league-app/shared';
+import type { RCVBallot } from '@league-app/shared';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -332,13 +334,83 @@ export async function advanceRoundPhase(
 }
 
 /**
- * Close a round — placeholder for task 12's EqualRCV scoring.
- * Currently just a no-op; task 12 will implement full scoring logic.
+ * Close a round — load all submitted ballots, run EqualRCV, and persist
+ * results to the round_results table.
+ *
+ * Edge case: if no ballots exist, all entries are assigned final_rank = 1.
  */
 export async function closeRound(roundId: string): Promise<void> {
-  // Task 12 will implement: load ballots, run EqualRCV, persist round_results
-  // For now, the phase update in advanceRoundPhase is sufficient
-  void roundId;
+  // 1. Load all non-bonus entries for this round (these are the candidates)
+  const entriesResult = await query<{ id: string }>(
+    `SELECT id FROM entries WHERE round_id = $1 AND is_bonus_track = false`,
+    [roundId]
+  );
+  const candidateIds = entriesResult.rows.map((r) => r.id);
+
+  if (candidateIds.length === 0) {
+    // Nothing to score
+    return;
+  }
+
+  // 2. Load all submitted ballots for this round with their items
+  const ballotsResult = await query<{ ballot_id: string; entry_id: string; rank_position: number }>(
+    `SELECT b.id AS ballot_id, bi.entry_id, bi.rank_position
+     FROM ballots b
+     INNER JOIN ballot_items bi ON bi.ballot_id = b.id
+     WHERE b.round_id = $1
+     ORDER BY b.id, bi.rank_position ASC, bi.entry_id ASC`,
+    [roundId]
+  );
+
+  // 3. Convert to RCVBallot[] format
+  // Group items by ballot_id, then by rank_position to form tiers
+  const ballotMap = new Map<string, Map<number, string[]>>();
+  for (const row of ballotsResult.rows) {
+    if (!ballotMap.has(row.ballot_id)) {
+      ballotMap.set(row.ballot_id, new Map());
+    }
+    const tierMap = ballotMap.get(row.ballot_id)!;
+    if (!tierMap.has(row.rank_position)) {
+      tierMap.set(row.rank_position, []);
+    }
+    tierMap.get(row.rank_position)!.push(row.entry_id);
+  }
+
+  const rcvBallots: RCVBallot[] = [];
+  for (const [, tierMap] of ballotMap) {
+    // Sort tiers by rank_position ascending (0 = highest preference)
+    const sortedPositions = Array.from(tierMap.keys()).sort((a, b) => a - b);
+    const ballot: RCVBallot = sortedPositions.map((pos) => tierMap.get(pos)!);
+    rcvBallots.push(ballot);
+  }
+
+  // 4. If no ballots exist, upsert all entries with final_rank = 1
+  if (rcvBallots.length === 0) {
+    for (const entryId of candidateIds) {
+      await query(
+        `INSERT INTO round_results (round_id, entry_id, final_rank, final_score)
+         VALUES ($1, $2, 1, 0)
+         ON CONFLICT (round_id, entry_id)
+         DO UPDATE SET final_rank = EXCLUDED.final_rank, final_score = EXCLUDED.final_score`,
+        [roundId, entryId]
+      );
+    }
+    return;
+  }
+
+  // 5. Run EqualRCV
+  const results = runEqualRCV(rcvBallots, candidateIds);
+
+  // 6. Persist results to round_results (upsert)
+  for (const result of results) {
+    await query(
+      `INSERT INTO round_results (round_id, entry_id, final_rank, final_score)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (round_id, entry_id)
+       DO UPDATE SET final_rank = EXCLUDED.final_rank, final_score = EXCLUDED.final_score`,
+      [roundId, result.candidateId, result.rank, result.finalScore]
+    );
+  }
 }
 
 /**
@@ -409,4 +481,149 @@ export async function checkFlexibleAdvancement(roundId: string): Promise<void> {
       await closeRound(roundId);
     }
   }
+}
+
+// ─── Round results response type ─────────────────────────────────────────────
+
+export interface RoundResultResponse {
+  entryId: string;
+  entryTitle: string;
+  submitterDisplayName: string;
+  finalRank: number;
+  finalScore: number;
+  sourceUrl: string;
+  source: string;
+  thumbnailUrl: string | null;
+  isBonusTrack: boolean;
+}
+
+/**
+ * Get the computed results for a closed round.
+ * Joins round_results with entries and users to return enriched result rows.
+ * Ordered by final_rank ASC, entry_title ASC.
+ */
+export async function getRoundResults(roundId: string): Promise<RoundResultResponse[]> {
+  const result = await query<{
+    entry_id: string;
+    title: string;
+    display_name: string;
+    final_rank: number;
+    final_score: string;
+    source_url: string;
+    source: string;
+    thumbnail_url: string | null;
+    is_bonus_track: boolean;
+  }>(
+    `SELECT
+       rr.entry_id,
+       e.title,
+       u.display_name,
+       rr.final_rank,
+       rr.final_score,
+       e.source_url,
+       e.source,
+       e.thumbnail_url,
+       e.is_bonus_track
+     FROM round_results rr
+     INNER JOIN entries e ON e.id = rr.entry_id
+     INNER JOIN users u ON u.id = e.submitter_id
+     WHERE rr.round_id = $1
+     ORDER BY rr.final_rank ASC, e.title ASC`,
+    [roundId]
+  );
+
+  return result.rows.map((row) => ({
+    entryId: row.entry_id,
+    entryTitle: row.title,
+    submitterDisplayName: row.display_name,
+    finalRank: row.final_rank,
+    finalScore: parseFloat(row.final_score),
+    sourceUrl: row.source_url,
+    source: row.source,
+    thumbnailUrl: row.thumbnail_url,
+    isBonusTrack: row.is_bonus_track,
+  }));
+}
+
+// ─── Update round ─────────────────────────────────────────────────────────────
+
+export interface UpdateRoundInput {
+  theme?: string;
+  description?: string;
+  overrideMediaTypeName?: string;
+  overrideMediaTypeEmoji?: string;
+  overrideSubmissionSources?: string[];
+  weight?: number;
+}
+
+/**
+ * Update editable fields on a round that hasn't closed yet.
+ * Admins can change theme, description, media type override, source overrides, and weight.
+ */
+export async function updateRound(
+  roundId: string,
+  leagueId: string,
+  input: UpdateRoundInput
+): Promise<RoundResponse> {
+  const {
+    theme,
+    description,
+    overrideMediaTypeName,
+    overrideMediaTypeEmoji,
+    overrideSubmissionSources,
+    weight,
+  } = input;
+
+  // Validate overrideSubmissionSources if provided
+  if (overrideSubmissionSources !== undefined) {
+    if (overrideSubmissionSources.length === 0) {
+      throw Object.assign(
+        new Error('At least one submission source must remain enabled.'),
+        { status: 422 }
+      );
+    }
+    const valid: SubmissionSource[] = ['spotify', 'youtube'];
+    for (const src of overrideSubmissionSources) {
+      if (!valid.includes(src as SubmissionSource)) {
+        throw Object.assign(
+          new Error(`Invalid submission source: ${src}`),
+          { status: 400 }
+        );
+      }
+    }
+    // Upsert round_submission_source_overrides
+    for (const src of valid) {
+      const enabled = overrideSubmissionSources.includes(src);
+      await query(
+        `INSERT INTO round_submission_source_overrides (round_id, source, enabled)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (round_id, source)
+         DO UPDATE SET enabled = EXCLUDED.enabled`,
+        [roundId, src, enabled]
+      );
+    }
+  }
+
+  // Build dynamic SET clause
+  const setClauses: string[] = [];
+  const params: unknown[] = [];
+  let idx = 1;
+
+  if (theme !== undefined) { setClauses.push(`theme = $${idx++}`); params.push(theme); }
+  if (description !== undefined) { setClauses.push(`description = $${idx++}`); params.push(description); }
+  if (overrideMediaTypeName !== undefined) { setClauses.push(`override_media_type_name = $${idx++}`); params.push(overrideMediaTypeName); }
+  if (overrideMediaTypeEmoji !== undefined) { setClauses.push(`override_media_type_emoji = $${idx++}`); params.push(overrideMediaTypeEmoji); }
+  if (weight !== undefined) { setClauses.push(`weight = $${idx++}`); params.push(weight); }
+
+  if (setClauses.length > 0) {
+    params.push(roundId);
+    await query(
+      `UPDATE rounds SET ${setClauses.join(', ')} WHERE id = $${idx}`,
+      params
+    );
+  }
+
+  const updated = await getRound(roundId, leagueId);
+  if (!updated) throw Object.assign(new Error('Round not found'), { status: 404 });
+  return updated;
 }

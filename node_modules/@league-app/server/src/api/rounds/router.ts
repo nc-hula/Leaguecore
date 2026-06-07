@@ -6,6 +6,8 @@ import {
   getRound,
   listRounds,
   advanceRoundPhase,
+  getRoundResults,
+  updateRound,
 } from './service';
 
 // mergeParams: true is required so that :leagueId from the parent router
@@ -171,6 +173,67 @@ router.get(
   }
 );
 
+// ─── PATCH /api/leagues/:leagueId/rounds/:id ─────────────────────────────────
+
+/**
+ * Update round settings before it closes. Admin only.
+ * Body: { theme?, description?, overrideMediaTypeName?, overrideMediaTypeEmoji?,
+ *         overrideSubmissionSources?, weight? }
+ */
+router.patch(
+  '/:id',
+  requireAuth,
+  requireLeagueAdmin,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { leagueId, id } = req.params;
+
+      const round = await getRound(id as string, leagueId as string);
+      if (!round) {
+        res.status(404).json({ error: 'Round not found' });
+        return;
+      }
+      if (round.phase === 'closed') {
+        res.status(409).json({ error: 'Cannot edit a closed round.' });
+        return;
+      }
+
+      const {
+        theme,
+        description,
+        overrideMediaTypeName,
+        overrideMediaTypeEmoji,
+        overrideSubmissionSources,
+        weight,
+      } = req.body as {
+        theme?: string;
+        description?: string;
+        overrideMediaTypeName?: string;
+        overrideMediaTypeEmoji?: string;
+        overrideSubmissionSources?: string[];
+        weight?: number;
+      };
+
+      const updated = await updateRound(id as string, leagueId as string, {
+        theme,
+        description,
+        overrideMediaTypeName,
+        overrideMediaTypeEmoji,
+        overrideSubmissionSources,
+        weight,
+      });
+
+      res.json(updated);
+    } catch (err) {
+      if (err instanceof Error && 'status' in err) {
+        handleServiceError(err, res);
+      } else {
+        next(err);
+      }
+    }
+  }
+);
+
 // ─── POST /api/leagues/:leagueId/rounds/:id/advance ──────────────────────────
 
 /**
@@ -192,6 +255,43 @@ router.post(
       } else {
         next(err);
       }
+    }
+  }
+);
+
+// ─── GET /api/leagues/:leagueId/rounds/:id/results ───────────────────────────
+
+/**
+ * Get per-round results. Round must be closed. Member only.
+ */
+router.get(
+  '/:id/results',
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { leagueId, id } = req.params;
+
+      const member = await isLeagueMember(leagueId as string, req.user!.id);
+      if (!member) {
+        res.status(403).json({ error: 'Forbidden: you are not a member of this league' });
+        return;
+      }
+
+      const round = await getRound(id as string, leagueId as string);
+      if (!round) {
+        res.status(404).json({ error: 'Round not found' });
+        return;
+      }
+
+      if (round.phase !== 'closed') {
+        res.status(403).json({ error: 'Results are only available after voting is complete.' });
+        return;
+      }
+
+      const results = await getRoundResults(id as string);
+      res.json(results);
+    } catch (err) {
+      next(err);
     }
   }
 );

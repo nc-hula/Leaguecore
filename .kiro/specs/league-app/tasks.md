@@ -121,8 +121,8 @@ Implement the League App as a TypeScript monorepo with a React 18 client, Node.j
   - [x] 10.3 Implement `GET /api/rounds/:roundId/ballot`: return the authenticated player's current ballot
     - _Requirements: 7.8_
 
-- [ ] 11. EqualRCV Engine
-  - [-] 11.1 Implement `runEqualRCV(ballots, weights?)` as a pure TypeScript function in `shared/equalRCV.ts`
+- [x] 11. EqualRCV Engine
+  - [x] 11.1 Implement `runEqualRCV(ballots, weights?)` as a pure TypeScript function in `shared/equalRCV.ts`
     - Distribute 1 vote equally among tied top-ranked active candidates per ballot per elimination round
     - Eliminate candidate(s) with fewest votes each round; break ties using prior rounds' scores in reverse chronological order; if still tied, eliminate all simultaneously
     - Assign final ranks based on elimination order (last eliminated = rank 1)
@@ -136,75 +136,75 @@ Implement the League App as a TypeScript monorepo with a React 18 client, Node.j
     - **Property 2: Fractional vote distribution sums to one**
     - Generate arbitrary ballots with ties (multiple candidates at same rank); for each elimination round of the algorithm, verify the sum of votes distributed from any single ballot across all active candidates equals exactly 1.0 (within floating-point tolerance)
     - **Validates: Requirements 9.7**
-  - [ ] 11.4 Write unit tests for EqualRCV with concrete scenarios: single winner, two-way tie broken by history, three-way tie with simultaneous elimination, weight application for cumulative standings
+  - [x] 11.4 Write unit tests for EqualRCV with concrete scenarios: single winner, two-way tie broken by history, three-way tie with simultaneous elimination, weight application for cumulative standings
     - _Requirements: 9.1, 9.2, 9.3, 9.6, 9.7_
 
-- [ ] 12. Scoring and results — server
-  - [~] 12.1 Implement the round-close handler: when a round advances to closed, load all ballots from DB, convert to `Ballot[]` format, call `runEqualRCV`, persist results to `round_results`
+- [x] 12. Scoring and results — server
+  - [x] 12.1 Implement the round-close handler: when a round advances to closed, load all ballots from DB, convert to `Ballot[]` format, call `runEqualRCV`, persist results to `round_results`
     - _Requirements: 9.1_
-  - [~] 12.2 Implement `GET /api/rounds/:roundId/results`: return per-round results with entry title and submitter display name (closed rounds only)
+  - [x] 12.2 Implement `GET /api/rounds/:roundId/results`: return per-round results with entry title and submitter display name (closed rounds only)
     - _Requirements: 9.4_
-  - [~] 12.3 Implement `GET /api/leagues/:leagueId/standings`: load all closed round results, treat each round winner as a ballot, call `runEqualRCV` with round weights, return cumulative standings
+  - [x] 12.3 Implement `GET /api/leagues/:leagueId/standings`: load all closed round results, treat each round winner as a ballot, call `runEqualRCV` with round weights, return cumulative standings
     - _Requirements: 9.2, 9.3, 9.5_
 
-- [ ] 13. Comments — server
-  - [~] 13.1 Implement `POST /api/rounds/:roundId/entries/:id/comments`: validate commenter is a league member; for regular entries, validate identity has been revealed to commenter; for bonus tracks, validate submission phase has ended; persist comment with author and timestamp
+- [x] 13. Comments — server
+  - [x] 13.1 Implement `POST /api/rounds/:roundId/entries/:id/comments`: validate commenter is a league member; for regular entries, validate identity has been revealed to commenter; for bonus tracks, validate submission phase has ended; persist comment with author and timestamp
     - _Requirements: 11.1, 11.2, 11.3_
   - [ ]* 13.2 Write property test for comment access requires identity reveal (P13)
     - **Property 13: Comment access requires identity reveal**
     - Generate league members and reveal states for arbitrary entry/viewer combinations; verify comment posting is permitted if and only if identity is revealed to that member (or entry is a bonus track and submission phase has ended); verify all other combinations are rejected with 403
     - **Validates: Requirements 11.1, 11.2**
-  - [~] 13.3 Implement `GET /api/rounds/:roundId/entries/:id/comments`: return comments in chronological order with author display name and timestamp
+  - [x] 13.3 Implement `GET /api/rounds/:roundId/entries/:id/comments`: return comments in chronological order with author display name and timestamp
     - _Requirements: 11.3, 11.4_
 
 - [ ] 14. Checkpoint — scoring, results, and comments
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 15. React client — project setup and routing
-  - [~] 15.1 Initialize React 18 + TypeScript client with Vite; install React Router v6, dnd-kit (`@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/modifiers`), and Vitest + `@testing-library/react` + `@testing-library/user-event`
+- [x] 15. React client — project setup and routing
+  - [x] 15.1 Initialize React 18 + TypeScript client with Vite; install React Router v6, dnd-kit (`@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/modifiers`), and Vitest + `@testing-library/react` + `@testing-library/user-event`
     - _Requirements: 7.1_
-  - [~] 15.2 Set up React Router with routes for: `/login` (LoginPage), `/` (DashboardPage), `/leagues/:id` (LeaguePage), `/leagues/:id/settings` (LeagueSettingsPage), `/leagues/:id/rounds/:roundId` (RoundPage), `/leagues/:id/rounds/:roundId/results` (ResultsPage)
+  - [x] 15.2 Set up React Router with routes for: `/login` (LoginPage), `/` (DashboardPage), `/leagues/:id` (LeaguePage), `/leagues/:id/settings` (LeagueSettingsPage), `/leagues/:id/rounds/:roundId` (RoundPage), `/leagues/:id/rounds/:roundId/results` (ResultsPage)
     - Implement a route guard that redirects unauthenticated users to `/login`
     - _Requirements: 1.4, 12.1_
-  - [~] 15.3 Implement a global API client module (`client/src/api.ts`) with typed fetch wrappers for all server endpoints; handle 401 responses by redirecting to `/login`
+  - [x] 15.3 Implement a global API client module (`client/src/api.ts`) with typed fetch wrappers for all server endpoints; handle 401 responses by redirecting to `/login`
     - _Requirements: 1.4_
 
-- [ ] 16. Authentication — client
-  - [~] 16.1 Implement `LoginPage`: render a "Sign in with Google" button that navigates to `/auth/google`; display error message when OAuth error query param is present
+- [x] 16. Authentication — client
+  - [x] 16.1 Implement `LoginPage`: render a "Sign in with Google" button that navigates to `/auth/google`; display error message when OAuth error query param is present
     - _Requirements: 1.1, 1.3_
-  - [~] 16.2 Implement an `AuthContext` provider that calls `GET /auth/me` on mount and exposes the current user; wrap the app in this provider
+  - [x] 16.2 Implement an `AuthContext` provider that calls `GET /auth/me` on mount and exposes the current user; wrap the app in this provider
     - _Requirements: 1.2, 1.4_
 
-- [ ] 17. Dashboard and league navigation — client
-  - [~] 17.1 Implement `DashboardPage`: fetch and display the user's leagues list; show `PendingActionBadge` on leagues where the user has a pending submission or vote
+- [x] 17. Dashboard and league navigation — client
+  - [x] 17.1 Implement `DashboardPage`: fetch and display the user's leagues list; show `PendingActionBadge` on leagues where the user has a pending submission or vote
     - _Requirements: 12.1, 12.2, 12.3_
-  - [~] 17.2 Implement `LeaguePage`: display current round with phase, theme, and description; show member list; show `InviteLink` component with copy-to-clipboard functionality for admins
+  - [x] 17.2 Implement `LeaguePage`: display current round with phase, theme, and description; show member list; show `InviteLink` component with copy-to-clipboard functionality for admins
     - _Requirements: 2.2, 12.2_
-  - [~] 17.3 Implement `LeagueSettingsPage` (admin only): form to update league name, media type (built-in picker + custom name/emoji fields), reveal mode, and submission source toggles (enforce at-least-one on client side with error message)
+  - [x] 17.3 Implement `LeagueSettingsPage` (admin only): form to update league name, media type (built-in picker + custom name/emoji fields), reveal mode, and submission source toggles (enforce at-least-one on client side with error message)
     - _Requirements: 3.2, 3.3, 3.4, 3.5, 3.6, 8.1, 8.2_
 
-- [ ] 18. Media embed components — client
-  - [~] 18.1 Implement `SpotifyEmbed`: render the `embed_html` iframe for Spotify entries; on `onError`, hide the iframe and render a styled anchor tag pointing to `sourceUrl`
+- [x] 18. Media embed components — client
+  - [x] 18.1 Implement `SpotifyEmbed`: render the `embed_html` iframe for Spotify entries; on `onError`, hide the iframe and render a styled anchor tag pointing to `sourceUrl`
     - _Requirements: 6.9, 6.10, 10.1, 10.3, 10.4_
-  - [~] 18.2 Implement `YouTubeEmbed`: render the `embed_html` iframe for YouTube entries; on `onError`, hide the iframe and render a styled anchor tag pointing to `sourceUrl`
+  - [x] 18.2 Implement `YouTubeEmbed`: render the `embed_html` iframe for YouTube entries; on `onError`, hide the iframe and render a styled anchor tag pointing to `sourceUrl`
     - _Requirements: 6.9, 6.10, 10.2, 10.3, 10.4_
-  - [~] 18.3 Implement `EntryCard`: compose `SpotifyEmbed` or `YouTubeEmbed` based on `entry.source`; display title, context comment, submitter name (when revealed), thread-starter comment (when revealed), and `CommentThread`
+  - [x] 18.3 Implement `EntryCard`: compose `SpotifyEmbed` or `YouTubeEmbed` based on `entry.source`; display title, context comment, submitter name (when revealed), thread-starter comment (when revealed), and `CommentThread`
     - _Requirements: 6.5, 6.7, 8.3, 8.4, 8.5_
   - [ ]* 18.4 Write unit tests for `SpotifyEmbed` and `YouTubeEmbed`: verify fallback anchor renders when `onError` fires; verify iframe is hidden on error
     - _Requirements: 6.10, 10.4_
 
 - [ ] 19. Ranker UI — client
-  - [~] 19.1 Implement `RankerBoard`: wrap with `DndContext` from dnd-kit; manage state for unsorted bin entries and ranked grid entries; apply `Snap` modifier to constrain drag to grid increments
+  - [-] 19.1 Implement `RankerBoard`: wrap with `DndContext` from dnd-kit; manage state for unsorted bin entries and ranked grid entries; apply `Snap` modifier to constrain drag to grid increments
     - _Requirements: 7.1, 7.2, 7.3_
-  - [~] 19.2 Implement `UnsortedBin`: droppable container displaying all unranked entry tiles; entries start here at the beginning of voting
+  - [-] 19.2 Implement `UnsortedBin`: droppable container displaying all unranked entry tiles; entries start here at the beginning of voting
     - _Requirements: 7.1, 7.2_
-  - [~] 19.3 Implement `RankingGrid`: droppable grid with rank rows; support multiple tiles at the same rank position (ties); display baseline rank row with ⚠️ tooltip "Really don't know how to feel about this one, huh?" when an entry is placed there
+  - [-] 19.3 Implement `RankingGrid`: droppable grid with rank rows; support multiple tiles at the same rank position (ties); display baseline rank row with ⚠️ tooltip "Really don't know how to feel about this one, huh?" when an entry is placed there
     - _Requirements: 7.2, 7.3, 7.4, 7.7_
-  - [~] 19.4 Implement `EntryTile`: draggable card showing entry title and thumbnail; used in both `UnsortedBin` and `RankingGrid`
+  - [-] 19.4 Implement `EntryTile`: draggable card showing entry title and thumbnail; used in both `UnsortedBin` and `RankingGrid`
     - _Requirements: 7.2_
-  - [~] 19.5 Implement `BonusTrackSection`: non-draggable section below the ranking grid displaying bonus track entries
+  - [-] 19.5 Implement `BonusTrackSection`: non-draggable section below the ranking grid displaying bonus track entries
     - _Requirements: 7.6_
-  - [~] 19.6 Wire ballot submission in `RankerBoard`: disable submit button and show error message if any entries remain in the unsorted bin; on submit, call `PUT /api/rounds/:roundId/ballot` with ranked items; lock UI after successful submission
+  - [ ] 19.6 Wire ballot submission in `RankerBoard`: disable submit button and show error message if any entries remain in the unsorted bin; on submit, call `PUT /api/rounds/:roundId/ballot` with ranked items; lock UI after successful submission
     - _Requirements: 7.5, 7.8, 7.9_
   - [ ]* 19.7 Write unit tests for `RankerBoard`: verify submit is blocked when bin is non-empty; verify snap behavior moves tile to nearest grid position; verify tiles move between bin and grid on drag-and-drop
     - _Requirements: 7.2, 7.3, 7.5, 7.9_

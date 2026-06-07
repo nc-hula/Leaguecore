@@ -417,3 +417,110 @@ export async function isLeagueMember(leagueId: string, userId: string): Promise<
   );
   return result.rows.length > 0;
 }
+
+// ─── Cumulative standings ────────────────────────────────────────────────────
+
+import { runEqualRCV } from '@league-app/shared';
+import type { RCVBallot } from '@league-app/shared';
+
+export interface StandingsEntry {
+  rank: number;
+  userId: string;
+  displayName: string;
+  finalScore: number;
+}
+
+export interface StandingsResponse {
+  standings: StandingsEntry[];
+}
+
+/**
+ * Compute cumulative standings for a league.
+ *
+ * Algorithm:
+ * 1. Load all closed rounds for the league with their weights.
+ * 2. For each closed round, load winner(s) from round_results (final_rank = 1).
+ * 3. Build one cumulative ballot per round where the winner(s) form the top tier.
+ *    The "candidates" in cumulative standings are submitter_ids of winning entries.
+ * 4. Build a weights map: each player's weight = sum of round weights for rounds they won.
+ * 5. Run runEqualRCV(cumulativeBallots, allPlayerIds, weights).
+ * 6. Return standings with rank, userId, displayName, finalScore.
+ */
+export async function getLeagueStandings(leagueId: string): Promise<StandingsResponse> {
+  // 1. Load all closed rounds with weights
+  const roundsResult = await query<{ id: string; weight: string }>(
+    `SELECT id, weight FROM rounds WHERE league_id = $1 AND phase = 'closed' ORDER BY created_at ASC`,
+    [leagueId]
+  );
+
+  // 2. Load all league members (these are the candidates in cumulative standings)
+  const membersResult = await query<{ user_id: string; display_name: string }>(
+    `SELECT lm.user_id, u.display_name
+     FROM league_members lm
+     INNER JOIN users u ON u.id = lm.user_id
+     WHERE lm.league_id = $1`,
+    [leagueId]
+  );
+
+  const allPlayerIds = membersResult.rows.map((r) => r.user_id);
+  const playerDisplayNames = new Map(membersResult.rows.map((r) => [r.user_id, r.display_name]));
+
+  if (allPlayerIds.length === 0) {
+    return { standings: [] };
+  }
+
+  // 3 & 4. For each closed round, get winner(s), build ballots, accumulate weights
+  const cumulativeBallots: RCVBallot[] = [];
+  const playerWeights = new Map<string, number>();
+
+  for (const round of roundsResult.rows) {
+    const roundWeight = parseFloat(round.weight);
+
+    // Get winner(s): entries with final_rank = 1, joined with submitter_id
+    const winnersResult = await query<{ submitter_id: string }>(
+      `SELECT e.submitter_id
+       FROM round_results rr
+       INNER JOIN entries e ON e.id = rr.entry_id
+       WHERE rr.round_id = $1 AND rr.final_rank = 1`,
+      [round.id]
+    );
+
+    if (winnersResult.rows.length === 0) continue;
+
+    const winnerIds = winnersResult.rows.map((r) => r.submitter_id);
+
+    // Build ballot: winner(s) form the top tier (single ballot per round)
+    const ballot: RCVBallot = [winnerIds];
+    cumulativeBallots.push(ballot);
+
+    // Accumulate round weights per winning player
+    for (const winnerId of winnerIds) {
+      const existing = playerWeights.get(winnerId) ?? 0;
+      playerWeights.set(winnerId, existing + roundWeight);
+    }
+  }
+
+  if (cumulativeBallots.length === 0) {
+    // No closed rounds with results yet — return all members at rank 1 with score 0
+    const standings: StandingsEntry[] = allPlayerIds.map((userId) => ({
+      rank: 1,
+      userId,
+      displayName: playerDisplayNames.get(userId) ?? '',
+      finalScore: 0,
+    }));
+    return { standings };
+  }
+
+  // 5. Run EqualRCV over cumulative ballots with accumulated weights
+  const rcvResults = runEqualRCV(cumulativeBallots, allPlayerIds, playerWeights);
+
+  // 6. Build standings response
+  const standings: StandingsEntry[] = rcvResults.map((result) => ({
+    rank: result.rank,
+    userId: result.candidateId,
+    displayName: playerDisplayNames.get(result.candidateId) ?? '',
+    finalScore: result.finalScore,
+  }));
+
+  return { standings };
+}

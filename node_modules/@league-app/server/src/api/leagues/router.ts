@@ -11,6 +11,7 @@ import {
   removeMember,
   grantAdmin,
   isLeagueMember,
+  getLeagueStandings,
 } from './service';
 
 const router = Router();
@@ -282,6 +283,32 @@ router.put(
       } else {
         next(err);
       }
+    }
+  }
+);
+
+// ─── GET /api/leagues/:id/standings ──────────────────────────────────────────
+
+/**
+ * Get cumulative league standings. Member only.
+ */
+router.get(
+  '/:id/standings',
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id } = req.params;
+
+      const member = await isLeagueMember(id as string, req.user!.id);
+      if (!member) {
+        res.status(403).json({ error: 'Forbidden: you are not a member of this league' });
+        return;
+      }
+
+      const standings = await getLeagueStandings(id as string);
+      res.json(standings);
+    } catch (err) {
+      next(err);
     }
   }
 );

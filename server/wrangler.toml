@@ -1,11 +1,21 @@
 name = "league-api"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-09-23"
 compatibility_flags = [ "nodejs_compat" ]
 
 [vars]
 NODE_ENV = "production"
+# Set this to the deployed Worker's own URL after the first deploy
+# (the SPA is served from the same origin), e.g. https://league-api.<subdomain>.workers.dev
 CLIENT_URL = "http://localhost:5173"
+
+# Serve the built React SPA (client/dist) from this same Worker. Requests that don't
+# match a static file fall through to the Hono app; the SPA fallback returns index.html
+# for client-side routes. Build the client (`npm run build`) before deploying.
+[assets]
+directory = "../client/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
 
 [triggers]
 crons = [ "* * * * *" ]

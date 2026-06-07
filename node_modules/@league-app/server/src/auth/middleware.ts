@@ -10,6 +10,12 @@ export interface AuthUser {
 }
 
 export type AppEnv = {
+  Bindings: {
+    // Static-assets binding (Workers Assets). Configured in wrangler.toml; used to
+    // serve the built React SPA from the same origin as the API. Optional so the
+    // app still runs in test/non-Worker contexts where no binding is present.
+    ASSETS?: { fetch: (req: Request) => Promise<Response> };
+  };
   Variables: {
     user?: AuthUser;
   };

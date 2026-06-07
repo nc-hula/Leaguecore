@@ -42,8 +42,17 @@ app.use('*', async (c, next) => {
 app.route('/auth', authRouter);
 app.route('/api', apiRouter);
 
-// 404 for unmatched routes — JSON, consistent with the rest of the API.
-app.notFound((c) => c.json({ error: 'Not found' }, 404));
+// Unmatched routes. API/auth paths get a JSON 404; everything else is a client-side
+// route, so hand it to the static-assets binding (configured with SPA fallback, which
+// returns index.html). This lets the single Worker serve both the API and the SPA from
+// one origin. Falls back to JSON 404 when no ASSETS binding is present (e.g. in tests).
+app.notFound((c) => {
+  const path = new URL(c.req.url).pathname;
+  if (path.startsWith('/api') || path.startsWith('/auth') || !c.env?.ASSETS) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+  return c.env.ASSETS.fetch(c.req.raw);
+});
 
 // Global error handler. Service-layer errors carry a numeric `status`; honour it.
 // Everything else is an unexpected failure → 500 (details logged, not leaked).
